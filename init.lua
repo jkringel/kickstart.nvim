@@ -99,7 +99,7 @@ do
   vim.g.maplocalleader = ' '
 
   -- Set to true if you have a Nerd Font installed and selected in the terminal
-  vim.g.have_nerd_font = false
+  vim.g.have_nerd_font = true
 
   -- [[ Setting options ]]
   --  See `:help vim.o`
@@ -110,7 +110,7 @@ do
   vim.o.number = true
   -- You can also add relative line numbers, to help with jumping.
   --  Experiment for yourself to see if you like it!
-  -- vim.o.relativenumber = true
+  vim.o.relativenumber = true
 
   -- Enable mouse mode, can be useful for resizing splits for example!
   vim.o.mouse = 'a'
@@ -441,6 +441,11 @@ do
 
   -- ... and there is more!
   --  Check out: https://github.com/nvim-mini/mini.nvim
+
+  -- [[ oil.nvim ]] - File explorer that lets you edit your filesystem like a buffer
+  vim.pack.add { gh 'stevearc/oil.nvim' }
+  require('oil').setup()
+  vim.keymap.set('n', '-', '<CMD>Oil<CR>', { desc = 'Open parent directory' })
 end
 
 -- ============================================================
@@ -485,14 +490,9 @@ do
 
   -- See `:help telescope` and `:help telescope.setup()`
   require('telescope').setup {
-    -- You can put your default mappings / updates / etc. in here
-    --  All the info you're looking for is in `:help telescope.setup()`
-    --
-    -- defaults = {
-    --   mappings = {
-    --     i = { ['<c-enter>'] = 'to_fuzzy_refine' },
-    --   },
-    -- },
+    defaults = {
+      path_display = { 'filename_first' },
+    },
     -- pickers = {}
     extensions = {
       ['ui-select'] = { require('telescope.themes').get_dropdown() },
@@ -694,8 +694,8 @@ do
     -- Some languages (like typescript) have entire language plugins that can be useful:
     --    https://github.com/pmizio/typescript-tools.nvim
     --
-    -- But for many setups, the LSP (`ts_ls`) will work just fine
-    -- ts_ls = {},
+    ts_ls = {},
+    jsonls = {},
 
     stylua = {}, -- Used to format Lua code
 
@@ -753,7 +753,7 @@ do
   -- You can press `g?` for help in this menu.
   local ensure_installed = vim.tbl_keys(servers or {})
   vim.list_extend(ensure_installed, {
-    -- You can add other tools here that you want Mason to install
+    'jdtls', -- Java language server (configured manually below via nvim-jdtls)
   })
 
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
@@ -762,6 +762,31 @@ do
     vim.lsp.config(name, server)
     vim.lsp.enable(name)
   end
+
+  -- [[ Java (nvim-jdtls) ]]
+  -- jdtls is started per-buffer by nvim-jdtls (not via vim.lsp.enable), so it needs its own attach
+  vim.pack.add { gh 'mfussenegger/nvim-jdtls' }
+  vim.api.nvim_create_autocmd('FileType', {
+    pattern = 'java',
+    group = vim.api.nvim_create_augroup('jdtls-start', { clear = true }),
+    callback = function()
+      local jdtls = require 'jdtls'
+      local root_dir = vim.fs.root(0, { '.git', 'mvnw', 'gradlew', 'pom.xml', 'build.gradle' }) or vim.fn.getcwd()
+      local workspace_dir = vim.fn.stdpath 'data' .. '/jdtls-workspace/' .. vim.fn.fnamemodify(root_dir, ':p:gs?/?-?')
+
+      jdtls.start_or_attach {
+        cmd = {
+          'jdtls',
+          '--java-executable',
+          '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java',
+          '-data',
+          workspace_dir,
+        },
+        root_dir = root_dir,
+        capabilities = require('blink.cmp').get_lsp_capabilities(),
+      }
+    end,
+  })
 end
 
 -- ============================================================
@@ -774,16 +799,10 @@ do
   require('conform').setup {
     notify_on_error = false,
     format_on_save = function(bufnr)
-      -- You can specify filetypes to autoformat on save here:
-      local enabled_filetypes = {
-        -- lua = true,
-        -- python = true,
-      }
-      if enabled_filetypes[vim.bo[bufnr].filetype] then
-        return { timeout_ms = 500 }
-      else
-        return nil
-      end
+      -- Format on save everywhere except these languages
+      local disable_filetypes = { java = true }
+      if disable_filetypes[vim.bo[bufnr].filetype] then return nil end
+      return { timeout_ms = 500 }
     end,
     default_format_opts = {
       lsp_format = 'fallback', -- Use external formatters if configured below, otherwise use LSP formatting. Set to `false` to disable LSP formatting entirely.
@@ -898,7 +917,7 @@ do
   vim.pack.add { { src = gh 'nvim-treesitter/nvim-treesitter', version = 'main' } }
 
   -- Ensure basic parsers are installed
-  local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' }
+  local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'java', 'python', 'typescript', 'tsx', 'javascript', 'json' }
   require('nvim-treesitter').install(parsers)
 
   ---@param buf integer
@@ -965,7 +984,7 @@ do
   -- require 'kickstart.plugins.lint'
   -- require 'kickstart.plugins.autopairs'
   -- require 'kickstart.plugins.neo-tree'
-  -- require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
+  require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
 
   -- NOTE: You can add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
   --
