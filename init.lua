@@ -492,6 +492,11 @@ do
   require('telescope').setup {
     defaults = {
       path_display = { 'filename_first' },
+      layout_strategy = 'flex',
+      layout_config = {
+        flex = { flip_columns = 120 },
+        vertical = { preview_cutoff = 20 },
+      },
     },
     -- pickers = {}
     extensions = {
@@ -688,8 +693,26 @@ do
   local servers = {
     -- clangd = {},
     -- gopls = {},
-    -- pyright = {},
-    -- rust_analyzer = {},
+    pyright = {
+      -- pyright doesn't detect project virtualenvs on its own; point it at
+      -- <root>/.venv (uv/poetry convention) so third-party imports resolve
+      before_init = function(_, config)
+        local venv_python = config.root_dir and (config.root_dir .. '/.venv/bin/python')
+        if venv_python and vim.uv.fs_stat(venv_python) then
+          config.settings = config.settings or {}
+          config.settings.python = config.settings.python or {}
+          config.settings.python.pythonPath = venv_python
+        end
+      end,
+    },
+
+    rust_analyzer = {
+      settings = {
+        ['rust-analyzer'] = {
+          check = { command = 'clippy' }, -- clippy lints in the editor instead of plain `cargo check`
+        },
+      },
+    },
     --
     -- Some languages (like typescript) have entire language plugins that can be useful:
     --    https://github.com/pmizio/typescript-tools.nvim
@@ -752,6 +775,8 @@ do
   --
   -- You can press `g?` for help in this menu.
   local ensure_installed = vim.tbl_keys(servers or {})
+  -- rust-analyzer comes from rustup, not Mason, so it always matches the active toolchain
+  ensure_installed = vim.tbl_filter(function(name) return name ~= 'rust_analyzer' end, ensure_installed)
   vim.list_extend(ensure_installed, {
     'jdtls', -- Java language server (configured manually below via nvim-jdtls)
   })
@@ -787,6 +812,14 @@ do
       }
     end,
   })
+
+  -- [[ Rust (crates.nvim) ]]
+  -- Version hints, update/upgrade code actions, and completion for dependencies in Cargo.toml.
+  -- Runs as an in-process LSP, so it works through the standard LSP keymaps and blink.cmp.
+  vim.pack.add { gh 'saecki/crates.nvim' }
+  require('crates').setup {
+    lsp = { enabled = true, actions = true, completion = true, hover = true },
+  }
 end
 
 -- ============================================================
@@ -809,12 +842,23 @@ do
     },
     -- You can also specify external formatters in here.
     formatters_by_ft = {
+      java = { 'spotless' },
       -- rust = { 'rustfmt' },
       -- Conform can also run multiple formatters sequentially
       -- python = { "isort", "black" },
       --
       -- You can use 'stop_after_first' to run the first available formatter from the list
       -- javascript = { "prettierd", "prettier", stop_after_first = true },
+    },
+    formatters = {
+      spotless = {
+        command = 'mvnd',
+        -- `spotlessFiles` takes Java regexes matched against absolute paths, so quote the
+        -- filename with \Q...\E rather than escaping it (vim.pesc would emit Lua escapes).
+        args = function(_, ctx) return { 'spotless:apply', '-DspotlessFiles=\\Q' .. ctx.filename .. '\\E', '-q' } end,
+        stdin = false,
+        cwd = require('conform.util').root_file { 'pom.xml' },
+      },
     },
   }
 
@@ -889,14 +933,13 @@ do
 
     snippets = { preset = 'luasnip' },
 
-    -- Blink.cmp includes an optional, recommended rust fuzzy matcher,
-    -- which automatically downloads a prebuilt binary when enabled.
-    --
-    -- By default, we use the Lua implementation instead, but you may enable
-    -- the rust implementation via `'prefer_rust_with_warning'`
+    -- The rust fuzzy matcher (prebuilt binary, downloaded on first use) is what
+    -- enables typo tolerance, proximity boosting, and frecency ranking - all of
+    -- which are inert under the Lua implementation. Falls back to Lua with a
+    -- warning if the binary is unavailable.
     --
     -- See `:help blink-cmp-config-fuzzy` for more information
-    fuzzy = { implementation = 'lua' },
+    fuzzy = { implementation = 'prefer_rust_with_warning' },
 
     -- Shows a signature help window while you type arguments for a function
     signature = { enabled = true },
@@ -917,7 +960,27 @@ do
   vim.pack.add { { src = gh 'nvim-treesitter/nvim-treesitter', version = 'main' } }
 
   -- Ensure basic parsers are installed
-  local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'java', 'python', 'typescript', 'tsx', 'javascript', 'json' }
+  local parsers = {
+    'bash',
+    'c',
+    'diff',
+    'html',
+    'lua',
+    'luadoc',
+    'markdown',
+    'markdown_inline',
+    'query',
+    'vim',
+    'vimdoc',
+    'java',
+    'python',
+    'typescript',
+    'tsx',
+    'javascript',
+    'json',
+    'rust',
+    'toml',
+  }
   require('nvim-treesitter').install(parsers)
 
   ---@param buf integer
@@ -966,6 +1029,36 @@ do
 end
 
 -- ============================================================
+-- SECTION 8B: TREESITTER TEXTOBJECTS
+-- AST-aware text objects (vaf/vif/vac/vic), motions (]m/[m, ]]/[[), and arg swap
+-- ============================================================
+do
+  vim.pack.add { gh 'nvim-treesitter/nvim-treesitter-textobjects' }
+
+  require('nvim-treesitter-textobjects').setup {
+    select = { lookahead = true },
+    move = { set_jumps = true },
+  }
+
+  -- Select around/inside function or class.
+  -- Overrides mini.ai's `f` (function call); use `ab`/`ib` or `a(`/`i(` for the argument list of a call.
+  local select = require('nvim-treesitter-textobjects.select').select_textobject
+  vim.keymap.set({ 'x', 'o' }, 'af', function() select('@function.outer', 'textobjects') end, { desc = 'Around function' })
+  vim.keymap.set({ 'x', 'o' }, 'if', function() select('@function.inner', 'textobjects') end, { desc = 'Inside function' })
+  vim.keymap.set({ 'x', 'o' }, 'ac', function() select('@class.outer', 'textobjects') end, { desc = 'Around class' })
+  vim.keymap.set({ 'x', 'o' }, 'ic', function() select('@class.inner', 'textobjects') end, { desc = 'Inside class' })
+
+  -- Motions: jump between functions / classes (composes with operators, e.g. d]m to delete to next method).
+  local move = require 'nvim-treesitter-textobjects.move'
+  vim.keymap.set({ 'n', 'x', 'o' }, ']m', function() move.goto_next_start('@function.outer', 'textobjects') end, { desc = 'Next method start' })
+  vim.keymap.set({ 'n', 'x', 'o' }, '[m', function() move.goto_previous_start('@function.outer', 'textobjects') end, { desc = 'Previous method start' })
+  vim.keymap.set({ 'n', 'x', 'o' }, ']M', function() move.goto_next_end('@function.outer', 'textobjects') end, { desc = 'Next method end' })
+  vim.keymap.set({ 'n', 'x', 'o' }, '[M', function() move.goto_previous_end('@function.outer', 'textobjects') end, { desc = 'Previous method end' })
+  vim.keymap.set({ 'n', 'x', 'o' }, ']]', function() move.goto_next_start('@class.outer', 'textobjects') end, { desc = 'Next class start' })
+  vim.keymap.set({ 'n', 'x', 'o' }, '[[', function() move.goto_previous_start('@class.outer', 'textobjects') end, { desc = 'Previous class start' })
+end
+
+-- ============================================================
 -- SECTION 9: OPTIONAL EXAMPLES / NEXT STEPS
 -- kickstart.plugins.* examples
 -- ============================================================
@@ -982,7 +1075,7 @@ do
   -- require 'kickstart.plugins.debug'
   -- require 'kickstart.plugins.indent_line'
   -- require 'kickstart.plugins.lint'
-  -- require 'kickstart.plugins.autopairs'
+  require 'kickstart.plugins.autopairs'
   -- require 'kickstart.plugins.neo-tree'
   require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
 
