@@ -444,7 +444,11 @@ do
 
   -- [[ oil.nvim ]] - File explorer that lets you edit your filesystem like a buffer
   vim.pack.add { gh 'stevearc/oil.nvim' }
-  require('oil').setup()
+  require('oil').setup {
+    -- oil defaults to signcolumn=no and the window-local value can stick to the window
+    -- after opening a file, hiding neotest/gitsigns signs; keep it at our global 'yes'
+    win_options = { signcolumn = 'yes' },
+  }
   vim.keymap.set('n', '-', '<CMD>Oil<CR>', { desc = 'Open parent directory' })
 end
 
@@ -796,7 +800,10 @@ do
     group = vim.api.nvim_create_augroup('jdtls-start', { clear = true }),
     callback = function()
       local jdtls = require 'jdtls'
-      local root_dir = vim.fs.root(0, { '.git', 'mvnw', 'gradlew', 'pom.xml', 'build.gradle' }) or vim.fn.getcwd()
+      -- Root at the repo, not the nearest module pom: in multi-module Maven projects one
+      -- jdtls instance must own every module, or cross-module requests (e.g. neotest-java
+      -- test runs) fail with "Given URI does not belong to any Java project".
+      local root_dir = vim.fs.root(0, { '.git', 'mvnw', 'gradlew' }) or vim.fn.getcwd()
       local workspace_dir = vim.fn.stdpath 'data' .. '/jdtls-workspace/' .. vim.fn.fnamemodify(root_dir, ':p:gs?/?-?')
 
       jdtls.start_or_attach {
