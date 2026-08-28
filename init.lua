@@ -372,6 +372,7 @@ do
     spec = {
       { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
       { '<leader>t', group = '[T]oggle' },
+      { '<leader>T', group = '[T]est' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
     },
@@ -1063,6 +1064,93 @@ do
   vim.keymap.set({ 'n', 'x', 'o' }, '[M', function() move.goto_previous_end('@function.outer', 'textobjects') end, { desc = 'Previous method end' })
   vim.keymap.set({ 'n', 'x', 'o' }, ']]', function() move.goto_next_start('@class.outer', 'textobjects') end, { desc = 'Next class start' })
   vim.keymap.set({ 'n', 'x', 'o' }, '[[', function() move.goto_previous_start('@class.outer', 'textobjects') end, { desc = 'Previous class start' })
+end
+
+-- ============================================================
+-- SECTION 8C: JAVA TESTING
+-- Keybindings that run surefire in a terminal split - the same command CI runs
+-- ============================================================
+do
+  local mvn = vim.fn.executable 'mvnd' == 1 and 'mvnd' or 'mvn'
+
+  ---@type { cmd: string[], cwd: string } | nil
+  local last_run
+
+  ---@type integer | nil window reused across runs so repeated tests don't stack splits
+  local test_win
+
+  ---@param cmd string[]
+  ---@param cwd string
+  local function run_in_split(cmd, cwd)
+    last_run = { cmd = cmd, cwd = cwd }
+    local origin_win = vim.api.nvim_get_current_win()
+    local prev_buf
+    if test_win and vim.api.nvim_win_is_valid(test_win) then
+      prev_buf = vim.api.nvim_win_get_buf(test_win)
+      vim.api.nvim_set_current_win(test_win)
+      vim.cmd.enew()
+    else
+      vim.cmd 'botright 20new'
+      test_win = vim.api.nvim_get_current_win()
+    end
+    vim.fn.jobstart(cmd, { term = true, cwd = cwd })
+    vim.cmd 'normal! G' -- park the terminal cursor on the last line so the window follows output
+    -- Drop the previous run's buffer (force also stops its job if still running)
+    if prev_buf and vim.api.nvim_buf_is_valid(prev_buf) then vim.api.nvim_buf_delete(prev_buf, { force = true }) end
+    -- Keep editing where you were - unless the run was triggered from the test split itself
+    if origin_win ~= test_win and vim.api.nvim_win_is_valid(origin_win) then vim.api.nvim_set_current_win(origin_win) end
+  end
+
+  -- Name of the innermost method containing the cursor, via treesitter
+  ---@return string | nil
+  local function enclosing_method()
+    local ok, parser = pcall(vim.treesitter.get_parser, 0)
+    if not ok or not parser then return nil end
+    parser:parse() -- ensure the tree exists; drawing normally triggers this, but not always (e.g. right after opening)
+    local node = vim.treesitter.get_node()
+    while node do
+      if node:type() == 'method_declaration' then
+        local name_node = node:field('name')[1]
+        return name_node and vim.treesitter.get_node_text(name_node, 0) or nil
+      end
+      node = node:parent()
+    end
+  end
+
+  -- Run `mvn test` in the buffer's module (nearest pom.xml), optionally
+  -- restricted to a surefire selector ("Class" or "Class#method").
+  ---@param selector string | nil
+  local function run_test(selector)
+    local module_dir = vim.fs.root(0, 'pom.xml')
+    if not module_dir then
+      vim.notify('No pom.xml found above ' .. vim.api.nvim_buf_get_name(0), vim.log.levels.ERROR)
+      return
+    end
+    local cmd = { mvn, 'test' }
+    if selector then table.insert(cmd, '-Dtest=' .. selector) end
+    run_in_split(cmd, module_dir)
+  end
+
+  vim.keymap.set('n', '<leader>Tt', function()
+    local method = enclosing_method()
+    if not method then
+      vim.notify('No enclosing method found', vim.log.levels.WARN)
+      return
+    end
+    run_test(vim.fn.expand '%:t:r' .. '#' .. method)
+  end, { desc = 'mvn test nearest [T]est method' })
+
+  vim.keymap.set('n', '<leader>Tf', function() run_test(vim.fn.expand '%:t:r') end, { desc = 'mvn test current [F]ile' })
+
+  vim.keymap.set('n', '<leader>Ta', function() run_test(nil) end, { desc = 'mvn test [A]ll in module' })
+
+  vim.keymap.set('n', '<leader>Tl', function()
+    if not last_run then
+      vim.notify('No previous test run', vim.log.levels.WARN)
+      return
+    end
+    run_in_split(last_run.cmd, last_run.cwd)
+  end, { desc = 'mvn test re-run [L]ast' })
 end
 
 -- ============================================================
