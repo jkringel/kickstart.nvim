@@ -371,8 +371,8 @@ do
     -- Document existing key chains
     spec = {
       { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
-      { '<leader>t', group = '[T]oggle' },
-      { '<leader>T', group = '[T]est' },
+      { '<leader>t', group = '[T]est' },
+      { '<leader>T', group = '[T]oggle' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
     },
@@ -686,7 +686,7 @@ do
       --
       -- This may be unwanted, since they displace some of your code
       if client and client:supports_method('textDocument/inlayHint', event.buf) then
-        map('<leader>th', function() vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf }) end, '[T]oggle Inlay [H]ints')
+        map('<leader>Th', function() vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf }) end, '[T]oggle Inlay [H]ints')
       end
     end,
   })
@@ -1079,6 +1079,9 @@ do
   ---@type integer | nil window reused across runs so repeated tests don't stack splits
   local test_win
 
+  ---@type fun() re-run the previous maven command; forward-declared so the terminal buffer can map it
+  local rerun_last
+
   ---@param cmd string[]
   ---@param cwd string
   local function run_in_split(cmd, cwd)
@@ -1094,11 +1097,21 @@ do
       test_win = vim.api.nvim_get_current_win()
     end
     vim.fn.jobstart(cmd, { term = true, cwd = cwd })
+    -- The other test maps are java-buffer-local, so give the split its own rerun map
+    vim.keymap.set('n', '<leader>tl', rerun_last, { buffer = true, desc = 'mvn test re-run [L]ast' })
     vim.cmd 'normal! G' -- park the terminal cursor on the last line so the window follows output
     -- Drop the previous run's buffer (force also stops its job if still running)
     if prev_buf and vim.api.nvim_buf_is_valid(prev_buf) then vim.api.nvim_buf_delete(prev_buf, { force = true }) end
     -- Keep editing where you were - unless the run was triggered from the test split itself
     if origin_win ~= test_win and vim.api.nvim_win_is_valid(origin_win) then vim.api.nvim_set_current_win(origin_win) end
+  end
+
+  rerun_last = function()
+    if not last_run then
+      vim.notify('No previous test run', vim.log.levels.WARN)
+      return
+    end
+    run_in_split(last_run.cmd, last_run.cwd)
   end
 
   -- Name of the innermost method containing the cursor, via treesitter
@@ -1131,26 +1144,27 @@ do
     run_in_split(cmd, module_dir)
   end
 
-  vim.keymap.set('n', '<leader>Tt', function()
-    local method = enclosing_method()
-    if not method then
-      vim.notify('No enclosing method found', vim.log.levels.WARN)
-      return
-    end
-    run_test(vim.fn.expand '%:t:r' .. '#' .. method)
-  end, { desc = 'mvn test nearest [T]est method' })
+  -- Keymaps are java-only: buffer-local, set on FileType (plus <leader>tl in the test split above)
+  vim.api.nvim_create_autocmd('FileType', {
+    pattern = 'java',
+    group = vim.api.nvim_create_augroup('java-test-keymaps', { clear = true }),
+    callback = function(event)
+      local map = function(keys, fn, desc) vim.keymap.set('n', keys, fn, { buffer = event.buf, desc = desc }) end
 
-  vim.keymap.set('n', '<leader>Tf', function() run_test(vim.fn.expand '%:t:r') end, { desc = 'mvn test current [F]ile' })
+      map('<leader>tt', function()
+        local method = enclosing_method()
+        if not method then
+          vim.notify('No enclosing method found', vim.log.levels.WARN)
+          return
+        end
+        run_test(vim.fn.expand '%:t:r' .. '#' .. method)
+      end, 'mvn test nearest [T]est method')
 
-  vim.keymap.set('n', '<leader>Ta', function() run_test(nil) end, { desc = 'mvn test [A]ll in module' })
-
-  vim.keymap.set('n', '<leader>Tl', function()
-    if not last_run then
-      vim.notify('No previous test run', vim.log.levels.WARN)
-      return
-    end
-    run_in_split(last_run.cmd, last_run.cwd)
-  end, { desc = 'mvn test re-run [L]ast' })
+      map('<leader>tf', function() run_test(vim.fn.expand '%:t:r') end, 'mvn test current [F]ile')
+      map('<leader>ta', function() run_test(nil) end, 'mvn test [A]ll in module')
+      map('<leader>tl', rerun_last, 'mvn test re-run [L]ast')
+    end,
+  })
 end
 
 -- ============================================================
