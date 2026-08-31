@@ -245,6 +245,21 @@ do
     group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
     callback = function() vim.hl.on_yank() end,
   })
+
+  -- Keep synthetic buffers (terminals, jdtls decompiled sources) out of the
+  -- buffer list so pickers and :bnext cycling only see real files
+  local unlist_group = vim.api.nvim_create_augroup('unlist-synthetic-buffers', { clear = true })
+  vim.api.nvim_create_autocmd('TermOpen', {
+    desc = 'Unlist terminal buffers',
+    group = unlist_group,
+    callback = function() vim.bo.buflisted = false end,
+  })
+  vim.api.nvim_create_autocmd('BufEnter', {
+    desc = 'Unlist jdtls decompiled source buffers',
+    group = unlist_group,
+    pattern = 'jdt://*',
+    callback = function() vim.bo.buflisted = false end,
+  })
 end
 
 -- ============================================================
