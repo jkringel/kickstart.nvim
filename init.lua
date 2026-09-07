@@ -737,7 +737,9 @@ do
     -- Some languages (like typescript) have entire language plugins that can be useful:
     --    https://github.com/pmizio/typescript-tools.nvim
     --
+    -- TypeScript: both servers are installed; which one attaches is decided per project below.
     tsc = {}, -- TypeScript 7's built-in language server (Mason package: tsc)
+    ts_ls = {}, -- typescript-language-server, for projects pinned to TypeScript < 7
     jsonls = {},
 
     stylua = {}, -- Used to format Lua code
@@ -805,6 +807,41 @@ do
   })
 
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
+
+  -- [[ TypeScript server selection ]]
+  -- `tsc` (TypeScript 7's built-in server) rejects projects on older TypeScript, e.g. any tsconfig
+  -- that still sets `baseUrl`. Pick per project from the nearest node_modules/typescript:
+  --   TypeScript >= 7, or no local TypeScript at all  -> tsc
+  --   TypeScript  < 7                                 -> ts_ls
+  -- Each server keeps its stock root detection from nvim-lspconfig; it is only gated.
+  local function project_typescript_major(bufnr)
+    local dir = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
+    local candidates = { dir }
+    for parent in vim.fs.parents(dir) do
+      table.insert(candidates, parent)
+    end
+    for _, p in ipairs(candidates) do
+      local pkg = p .. '/node_modules/typescript/package.json'
+      if vim.uv.fs_stat(pkg) then
+        local ok, json = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), '\n'))
+        return ok and tonumber((json.version or ''):match '^(%d+)') or nil
+      end
+    end
+    return nil
+  end
+  local ts_server_wanted = {
+    tsc = function(major) return major == nil or major >= 7 end,
+    ts_ls = function(major) return major ~= nil and major < 7 end,
+  }
+  for name, wanted in pairs(ts_server_wanted) do
+    local default_root_dir = vim.lsp.config[name].root_dir
+    servers[name].root_dir = function(bufnr, on_dir)
+      if not wanted(project_typescript_major(bufnr)) then return end
+      if type(default_root_dir) == 'function' then return default_root_dir(bufnr, on_dir) end
+      local root = vim.fs.root(bufnr, { 'package.json', '.git' })
+      if root then on_dir(root) end
+    end
+  end
 
   for name, server in pairs(servers) do
     vim.lsp.config(name, server)
