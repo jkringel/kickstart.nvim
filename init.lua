@@ -860,7 +860,7 @@ do
       -- jdtls instance must own every module, or cross-module requests (e.g. neotest-java
       -- test runs) fail with "Given URI does not belong to any Java project".
       local root_dir = vim.fs.root(0, { '.git', 'mvnw', 'gradlew' }) or vim.fn.getcwd()
-      local workspace_dir = vim.fn.stdpath 'data' .. '/jdtls-workspace/' .. vim.fn.fnamemodify(root_dir, ':p:gs?/?-?')
+      local workspace_dir = vim.fn.stdpath 'cache' .. '/jdtls-workspace/' .. vim.fn.fnamemodify(root_dir, ':p:gs?/?-?')
 
       jdtls.start_or_attach {
         cmd = {
