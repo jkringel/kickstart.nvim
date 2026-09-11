@@ -893,7 +893,13 @@ do
             },
           },
         },
-        on_attach = function() require('jdtls').setup_dap { hotcodereplace = 'auto' } end,
+        on_attach = function()
+          require('jdtls').setup_dap { hotcodereplace = 'auto' }
+          -- setup_dap also registers a provider that scans the workspace for main classes on every
+          -- dap.continue(). On our multi-module repos it blows its 2s budget ("Discovering main classes
+          -- took too long") and would only duplicate the IntelliJ configs, so drop it.
+          require('dap').providers.configs['jdtls'] = nil
+        end,
       }
     end,
   })
@@ -1261,11 +1267,15 @@ do
   local dap = require 'dap'
   local dapui = require 'dapui'
 
-  -- dap-ui routes the launched process's terminal into its console pane, so no terminal_win_cmd here
+  -- dap-ui routes the launched process's terminal into its console pane, so no terminal_win_cmd here.
+  -- Open on session start but leave it open on exit: a Dropwizard app that dies during startup prints
+  -- its stack trace to that console, and auto-closing would hide it. <leader>du closes it.
   dapui.setup()
   dap.listeners.after.event_initialized['dapui'] = dapui.open
-  dap.listeners.before.event_terminated['dapui'] = dapui.close
-  dap.listeners.before.event_exited['dapui'] = dapui.close
+
+  -- nvim-dap also reads .vscode/launch.json by default. Ours are stale IntelliJ mirrors and not even
+  -- valid JSON for its strict parser, so only the .run configs below are offered.
+  dap.providers.configs['dap.launch.json'] = nil
 
   -- [[ IntelliJ run configurations as launch configs ]]
   -- Every Java repo ships `.run/*.run.xml` Application configs, and IntelliJ is where the team maintains
