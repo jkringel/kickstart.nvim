@@ -380,6 +380,7 @@ do
     spec = {
       { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
       { '<leader>t', group = '[T]est' },
+      { '<leader>d', group = '[D]ebug' },
       { '<leader>T', group = '[T]oggle' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
@@ -804,6 +805,7 @@ do
   ensure_installed = vim.tbl_filter(function(name) return name ~= 'rust_analyzer' end, ensure_installed)
   vim.list_extend(ensure_installed, {
     'jdtls', -- Java language server (configured manually below via nvim-jdtls)
+    'java-debug-adapter', -- jdtls plugin that adds the DAP server; handed to jdtls as a bundle below
   })
 
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
@@ -862,6 +864,11 @@ do
       local root_dir = vim.fs.root(0, { '.git', 'mvnw', 'gradlew' }) or vim.fn.getcwd()
       local workspace_dir = vim.fn.stdpath 'cache' .. '/jdtls-workspace/' .. vim.fn.fnamemodify(root_dir, ':p:gs?/?-?')
 
+      -- java-debug is a jdtls plugin, not a standalone adapter: jdtls loads this jar as a bundle and serves
+      -- DAP through it. `setup_dap` in on_attach registers the resulting `java` adapter with nvim-dap.
+      local bundles =
+        vim.fn.glob(vim.fn.stdpath 'data' .. '/mason/packages/java-debug-adapter/extension/server/com.microsoft.java.debug.plugin-*.jar', true, true)
+
       jdtls.start_or_attach {
         cmd = {
           'jdtls',
@@ -872,6 +879,21 @@ do
         },
         root_dir = root_dir,
         capabilities = require('blink.cmp').get_lsp_capabilities(),
+        init_options = { bundles = bundles },
+        settings = {
+          java = {
+            configuration = {
+              -- The services target Java 11 (the IntelliJ run configs pin JRE 11) but jdtls runs on 21 (cmd above).
+              -- Without this mapping the JavaSE-11 execution environment falls back to that 21 and debug
+              -- launches would start the app on the wrong JDK.
+              runtimes = {
+                { name = 'JavaSE-11', path = '/Library/Java/JavaVirtualMachines/temurin-11.jdk/Contents/Home', default = true },
+                { name = 'JavaSE-21', path = '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home' },
+              },
+            },
+          },
+        },
+        on_attach = function() require('jdtls').setup_dap { hotcodereplace = 'auto' } end,
       }
     end,
   })
@@ -1224,6 +1246,91 @@ do
       map('<leader>tl', rerun_last, 'mvn test re-run [L]ast')
     end,
   })
+end
+
+-- ============================================================
+-- SECTION 8D: JAVA DEBUGGING
+-- nvim-dap driving java-debug inside jdtls, launching from the IntelliJ run configs our repos ship
+-- ============================================================
+do
+  vim.pack.add {
+    gh 'mfussenegger/nvim-dap',
+    gh 'rcarriga/nvim-dap-ui',
+    gh 'nvim-neotest/nvim-nio', -- dap-ui dependency
+  }
+  local dap = require 'dap'
+  local dapui = require 'dapui'
+
+  -- dap-ui routes the launched process's terminal into its console pane, so no terminal_win_cmd here
+  dapui.setup()
+  dap.listeners.after.event_initialized['dapui'] = dapui.open
+  dap.listeners.before.event_terminated['dapui'] = dapui.close
+  dap.listeners.before.event_exited['dapui'] = dapui.close
+
+  -- [[ IntelliJ run configurations as launch configs ]]
+  -- Every Java repo ships `.run/*.run.xml` Application configs, and IntelliJ is where the team maintains
+  -- them. Rather than mirror them in launch.json, read them on every `dap.continue()` so edits and new
+  -- configs show up without a reload. Across ~240 configs in the workspace java-debug only needs six
+  -- fields; plugin extension blocks (AWS toolkit "current connection", EnvFile, coverage) are ignored,
+  -- so AWS credentials must come from the shell.
+  local JDK11 = '/Library/Java/JavaVirtualMachines/temurin-11.jdk/Contents/Home'
+
+  ---@param s string
+  ---@return string
+  local function xml_unescape(s) return (s:gsub('&quot;', '"'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')) end
+
+  ---@param path string absolute path to a .run.xml file
+  ---@param root string repo root: IntelliJ's $PROJECT_DIR$ and its default working directory
+  ---@return table | nil nvim-dap launch config, nil for non-Application configs (JUnit, Python, ...)
+  local function parse_run_xml(path, root)
+    local xml = table.concat(vim.fn.readfile(path), '\n')
+    if not xml:find('type="Application"', 1, true) then return nil end
+    local root_repl = root:gsub('%%', '%%%%')
+    local function expand(v) return (xml_unescape(v):gsub('%$PROJECT_DIR%$', root_repl)) end
+    local function option(name)
+      local v = xml:match('<option name="' .. name .. '" value="([^"]*)"')
+      return v and expand(v) or nil
+    end
+    local env = {}
+    for k, v in xml:gmatch '<env name="([^"]*)" value="([^"]*)"' do
+      env[k] = expand(v)
+    end
+    -- ALTERNATIVE_JRE_PATH is an IntelliJ SDK name: "11", "temurin-11", "corretto-11", or a full path
+    local jre = option 'ALTERNATIVE_JRE_PATH'
+    return {
+      type = 'java',
+      request = 'launch',
+      name = xml:match '<configuration [^>]-name="([^"]*)"',
+      mainClass = option 'MAIN_CLASS_NAME',
+      projectName = xml:match '<module name="([^"]*)"', -- IntelliJ module name == Maven artifactId == jdtls project name
+      args = option 'PROGRAM_PARAMETERS' or '',
+      env = env,
+      cwd = option 'WORKING_DIRECTORY' or root,
+      javaExec = (jre and jre:find('11', 1, true)) and JDK11 .. '/bin/java' or nil,
+    }
+  end
+
+  dap.providers.configs['intellij-run'] = function(bufnr)
+    if vim.bo[bufnr].filetype ~= 'java' then return {} end
+    local root = vim.fs.root(bufnr, { '.git', 'mvnw', 'gradlew' }) or vim.fn.getcwd()
+    local configs = {}
+    for _, path in ipairs(vim.fn.glob(root .. '/.run/*.run.xml', true, true)) do
+      local config = parse_run_xml(path, root)
+      if config then table.insert(configs, config) end
+    end
+    return configs
+  end
+
+  local map = function(keys, fn, desc) vim.keymap.set('n', keys, fn, { desc = desc }) end
+  map('<leader>dc', dap.continue, 'Debug: [C]ontinue, or pick a run config')
+  map('<leader>dl', dap.run_last, 'Debug: re-run [L]ast config')
+  map('<leader>dq', dap.terminate, 'Debug: [Q]uit session')
+  map('<leader>db', dap.toggle_breakpoint, 'Debug: toggle [B]reakpoint')
+  map('<leader>dB', function() dap.set_breakpoint(vim.fn.input 'Breakpoint condition: ') end, 'Debug: conditional [B]reakpoint')
+  map('<leader>di', dap.step_into, 'Debug: step [I]nto')
+  map('<leader>do', dap.step_over, 'Debug: step [O]ver')
+  map('<leader>dO', dap.step_out, 'Debug: step [O]ut')
+  map('<leader>du', dapui.toggle, 'Debug: toggle [U]I')
 end
 
 -- ============================================================
