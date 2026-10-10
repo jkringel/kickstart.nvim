@@ -803,8 +803,8 @@ do
   local ensure_installed = vim.tbl_keys(servers or {})
   -- rust-analyzer comes from rustup, not Mason, so it always matches the active toolchain
   ensure_installed = vim.tbl_filter(function(name) return name ~= 'rust_analyzer' end, ensure_installed)
+  -- jdtls comes from Homebrew, not Mason, so it stays updated with brew and matches the Claude Code jdtls-lsp plugin
   vim.list_extend(ensure_installed, {
-    'jdtls', -- Java language server (configured manually below via nvim-jdtls)
     'java-debug-adapter', -- jdtls plugin that adds the DAP server; handed to jdtls as a bundle below
   })
 
@@ -871,7 +871,7 @@ do
 
       jdtls.start_or_attach {
         cmd = {
-          'jdtls',
+          '/opt/homebrew/bin/jdtls', -- absolute path: Mason's bin is prepended to PATH and would otherwise win
           '--java-executable',
           '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java',
           '-data',
