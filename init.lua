@@ -355,6 +355,20 @@ do
   vim.pack.add { gh 'NMAC427/guess-indent.nvim' }
   require('guess-indent').setup {}
 
+  -- guess-indent has nothing to detect in new/empty files, which then fall back to 8-wide hard tabs.
+  -- Default Java to 4 spaces to match spotless.
+  vim.api.nvim_create_autocmd('FileType', {
+    desc = 'Default Java indentation to 4 spaces',
+    group = vim.api.nvim_create_augroup('java-indent', { clear = true }),
+    pattern = 'java',
+    callback = function()
+      vim.bo.expandtab = true
+      vim.bo.shiftwidth = 4
+      vim.bo.tabstop = 4
+      vim.bo.softtabstop = 4
+    end,
+  })
+
   -- Here is a more advanced configuration example that passes options to `gitsigns.nvim`
   --
   -- See `:help gitsigns` to understand what each configuration key does.
