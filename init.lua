@@ -887,7 +887,9 @@ do
         cmd = {
           '/opt/homebrew/bin/jdtls', -- absolute path: Mason's bin is prepended to PATH and would otherwise win
           '--java-executable',
-          '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java',
+          -- brew's openjdk is jdtls's declared dependency, so it tracks whatever Java the bottle needs
+          -- (1.63.0 requires 25+; pinning temurin-21 here made it exit at startup)
+          '/opt/homebrew/opt/openjdk/bin/java',
           '-data',
           workspace_dir,
         },
@@ -897,8 +899,8 @@ do
         settings = {
           java = {
             configuration = {
-              -- The services target Java 11 (the IntelliJ run configs pin JRE 11) but jdtls runs on 21 (cmd above).
-              -- Without this mapping the JavaSE-11 execution environment falls back to that 21 and debug
+              -- The services target Java 11 (the IntelliJ run configs pin JRE 11) but jdtls runs on brew's openjdk (cmd above).
+              -- Without this mapping the JavaSE-11 execution environment falls back to that JDK and debug
               -- launches would start the app on the wrong JDK.
               runtimes = {
                 { name = 'JavaSE-11', path = '/Library/Java/JavaVirtualMachines/temurin-11.jdk/Contents/Home', default = true },
