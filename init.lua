@@ -755,6 +755,7 @@ do
     -- TypeScript: both servers are installed; which one attaches is decided per project below.
     tsc = {}, -- TypeScript 7's built-in language server (Mason package: tsc)
     ts_ls = {}, -- typescript-language-server, for projects pinned to TypeScript < 7
+    eslint = {}, -- only attaches in projects with an ESLint config
     jsonls = {},
 
     stylua = {}, -- Used to format Lua code
@@ -956,8 +957,17 @@ do
       --
       -- You can use 'stop_after_first' to run the first available formatter from the list
       -- javascript = { "prettierd", "prettier", stop_after_first = true },
+
+      -- Prettier only in repos that use it (see require_cwd below). No LSP fallback, so repos without
+      -- Prettier aren't reformatted by the TypeScript server's own style.
+      javascript = { 'prettierd', lsp_format = 'never' },
+      javascriptreact = { 'prettierd', lsp_format = 'never' },
+      typescript = { 'prettierd', lsp_format = 'never' },
+      typescriptreact = { 'prettierd', lsp_format = 'never' },
     },
     formatters = {
+      -- Skip projects with no Prettier config file or "prettier" key in package.json
+      prettierd = { require_cwd = true },
       spotless = {
         command = 'mvnd',
         -- `spotlessFiles` takes Java regexes matched against absolute paths, so quote the
