@@ -1277,17 +1277,38 @@ end
 do
   vim.pack.add {
     gh 'mfussenegger/nvim-dap',
-    gh 'rcarriga/nvim-dap-ui',
-    gh 'nvim-neotest/nvim-nio', -- dap-ui dependency
+    { src = gh 'igorlfs/nvim-dap-view', version = vim.version.range '1.*' },
   }
   local dap = require 'dap'
-  local dapui = require 'dapui'
+  local dapview = require 'dap-view'
 
-  -- dap-ui routes the launched process's terminal into its console pane, so no terminal_win_cmd here.
-  -- Open on session start but leave it open on exit: a Dropwizard app that dies during startup prints
-  -- its stack trace to that console, and auto-closing would hide it. <leader>du closes it.
-  dapui.setup()
-  dap.listeners.after.event_initialized['dapui'] = dapui.open
+  -- nvim-dap's default signs are letters in SignColumn gray and the stopped line uses debugPC, which
+  -- tokyonight makes nearly invisible. DapStoppedLine is tokyonight's amber tint meant for this; the
+  -- link is only a fallback for colorschemes that don't define it.
+  vim.api.nvim_set_hl(0, 'DapStoppedLine', { default = true, link = 'Visual' })
+  vim.fn.sign_define('DapStopped', { text = '→', texthl = 'DiagnosticWarn', linehl = 'DapStoppedLine', numhl = 'DiagnosticWarn' })
+  vim.fn.sign_define('DapBreakpoint', { text = '●', texthl = 'DiagnosticError' })
+  vim.fn.sign_define('DapBreakpointCondition', { text = '◆', texthl = 'DiagnosticError' })
+  vim.fn.sign_define('DapBreakpointRejected', { text = '○', texthl = 'Comment' })
+
+  -- One tabbed window (switch views with the letter in its winbar, g? for keymaps) plus a console window
+  -- for the launched process; dap-view sets terminal_win_cmd itself, so none here.
+  -- keep_terminal: open on session start, close the views when it ends but keep the console. A Dropwizard
+  -- app that dies during startup prints its stack trace there, so it must survive the session.
+  -- :DapViewClose! clears it (<leader>du reopens the views first, then closes everything).
+  dapview.setup {
+    auto_toggle = 'keep_terminal',
+    -- Console on the right puts the views bottom-left, under where the cursor usually is in code, so <C-j>
+    -- lands there in one move
+    windows = { terminal = { position = 'right' } },
+    -- Variable values as virtual text while stopped (inline, right after the variable name)
+    virtual_text = { enabled = true },
+  }
+
+  -- Where to show the stopped line. Vim's default 'uselast' falls back to the previous window when focus is
+  -- in a non-file window (e.g. the console); if that's dap-view's window it fails with E1513 (winfixbuf),
+  -- or if it's the console it replaces the console. Prefer a window already showing the file instead.
+  dap.defaults.fallback.switchbuf = 'usevisible,useopen,uselast'
 
   -- nvim-dap also reads .vscode/launch.json by default. Ours are stale IntelliJ mirrors and not even
   -- valid JSON for its strict parser, so only the .run configs below are offered.
@@ -1356,7 +1377,11 @@ do
   map('<leader>di', dap.step_into, 'Debug: step [I]nto')
   map('<leader>do', dap.step_over, 'Debug: step [O]ver')
   map('<leader>dO', dap.step_out, 'Debug: step [O]ut')
-  map('<leader>du', dapui.toggle, 'Debug: toggle [U]I')
+  -- true: closing also hides the console window, not just the views
+  map('<leader>du', function() dapview.toggle(true) end, 'Debug: toggle [U]I')
+  -- No expression: word under cursor in normal mode, the selection in visual. enter = true focuses the
+  -- float so objects can be expanded; q closes it.
+  vim.keymap.set({ 'n', 'v' }, '<leader>de', function() dapview.hover(nil, true) end, { desc = 'Debug: [E]valuate under cursor' })
 end
 
 -- ============================================================
