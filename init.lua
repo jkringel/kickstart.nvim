@@ -992,7 +992,10 @@ do
   -- require('luasnip.loaders.from_vscode').lazy_load()
 
   -- [[ Autocomplete Engine ]]
-  vim.pack.add { { src = gh 'saghen/blink.cmp', version = vim.version.range '1.*' } }
+  vim.pack.add {
+    { src = gh 'saghen/blink.cmp', version = vim.version.range '1.*' },
+    gh 'mayromr/blink-cmp-dap', -- debug REPL completions from the debug adapter (java-debug)
+  }
   require('blink.cmp').setup {
     keymap = {
       -- 'default' (recommended) for mappings similar to built-in completions
@@ -1036,6 +1039,10 @@ do
 
     sources = {
       default = { 'lsp', 'path', 'snippets' },
+      per_filetype = { ['dap-repl'] = { 'dap' } },
+      providers = {
+        dap = { name = 'dap', module = 'blink-cmp-dap' },
+      },
     },
 
     snippets = { preset = 'luasnip' },
@@ -1050,6 +1057,15 @@ do
 
     -- Shows a signature help window while you type arguments for a function
     signature = { enabled = true },
+
+    cmdline = {
+      completion = {
+        -- Menu as you type in `:` commands and input() prompts (e.g. dap-view's watch expressions), not `/` search
+        menu = { auto_show = function() return vim.fn.getcmdtype() == ':' or vim.fn.getcmdtype() == '@' end },
+        -- Nothing selected until <Tab>/<C-n>, so <CR> runs what you typed
+        list = { selection = { preselect = false } },
+      },
+    },
   }
 end
 
